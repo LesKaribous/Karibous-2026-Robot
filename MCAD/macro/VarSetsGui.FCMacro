@@ -1,0 +1,376 @@
+# ============================================================
+# VarSetsGui.FCMacro
+# Interface unifiée pour manipuler les VarSets FreeCAD
+# Types : Slider, PushButton, MomentaryButton
+# Version complète avec feedback visuel
+# ============================================================
+
+try:
+    from PySide6 import QtWidgets, QtCore
+except ImportError:
+    from PySide2 import QtWidgets, QtCore
+
+import FreeCAD, FreeCADGui
+
+doc = FreeCAD.ActiveDocument
+if not doc:
+    FreeCAD.Console.PrintError("Aucun document actif.\n")
+    raise SystemExit
+
+# ------------------------------------------------------------
+# 1. Création / récupération du VarSet principal
+# ------------------------------------------------------------
+varset = doc.getObject("VarSetsGui")
+if not varset:
+    varset = doc.addObject("App::VarSet", "VarSetsGui")
+    FreeCAD.Console.PrintMessage("Création du VarSet 'VarSetsGui'.\n")
+
+# ------------------------------------------------------------
+# 2. Fonction utilitaire : création d’un contrôle
+# ------------------------------------------------------------
+def create_control(idx):
+    base = f"Control{idx}"
+    group = base
+
+    varset.addProperty("App::PropertyString", f"{base}_Name", group, "Nom affiché")
+    setattr(varset, f"{base}_Name", f"Contrôle {idx}")
+
+    varset.addProperty("App::PropertyString", f"{base}_Type", group, "Type de contrôle (Slider, PushButton, MomentaryButton)")
+    setattr(varset, f"{base}_Type", "Slider")
+
+    varset.addProperty("App::PropertyFloat", f"{base}_Min", group, "Valeur minimum")
+    setattr(varset, f"{base}_Min", 0.0)
+
+    varset.addProperty("App::PropertyFloat", f"{base}_Max", group, "Valeur maximum")
+    setattr(varset, f"{base}_Max", 100.0)
+
+    varset.addProperty("App::PropertyFloat", f"{base}_Target", group, "Valeur actuelle")
+    setattr(varset, f"{base}_Target", 50.0)
+
+# ------------------------------------------------------------
+# 3. Création du premier contrôle si nécessaire
+# ------------------------------------------------------------
+if not hasattr(varset, "Control1_Target"):
+    create_control(1)
+    FreeCAD.ActiveDocument.recompute()
+
+# ------------------------------------------------------------
+# 4. Liste dynamique des contrôles existants
+# ------------------------------------------------------------
+def list_controls():
+    controls = []
+    i = 1
+    while hasattr(varset, f"Control{i}_Target"):
+        controls.append(i)
+        i += 1
+    return controls
+
+# ------------------------------------------------------------
+# 5. Widget principal
+# ------------------------------------------------------------
+class VarSetsGuiWidget(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.groups = {}
+        self.setMinimumHeight(600)
+        self.setStyleSheet(FreeCADGui.getMainWindow().styleSheet())
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Zone défilante
+        self.scroll = QtWidgets.QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll_content = QtWidgets.QWidget()
+        self.scroll_content.setMinimumHeight(500)
+        self.scroll_layout = QtWidgets.QVBoxLayout(self.scroll_content)
+        self.scroll.setWidget(self.scroll_content)
+        layout.addWidget(self.scroll, stretch=1)
+
+        # Bouton d'ajout
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.add_btn = QtWidgets.QPushButton("+ Ajouter un contrôle")
+        self.add_btn.clicked.connect(self.add_control)
+        btn_layout.addWidget(self.add_btn)
+        layout.addLayout(btn_layout)
+
+        self.build_controls()
+
+    # --------------------------------------------------------
+    # Génération dynamique des contrôles
+    # --------------------------------------------------------
+    def build_controls(self):
+        # Nettoyage complet du layout scroll
+        for i in reversed(range(self.scroll_layout.count())):
+            item = self.scroll_layout.itemAt(i)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+        self.groups.clear()
+
+        for i in list_controls():
+            base = f"Control{i}"
+            name = getattr(varset, f"{base}_Name", base)
+            ctype = getattr(varset, f"{base}_Type", "Slider")
+
+            group = QtWidgets.QGroupBox(f"{base}")
+            vbox = QtWidgets.QVBoxLayout()
+            group.setLayout(vbox)
+            self.scroll_layout.addWidget(group)
+
+            # Ligne 1 : Nom + Type + Supprimer
+            hlayout = QtWidgets.QHBoxLayout()
+            name_edit = QtWidgets.QLineEdit(str(name))
+            name_edit.editingFinished.connect(lambda n=base, e=name_edit: self.rename_control(n, e.text()))
+
+            type_select = QtWidgets.QComboBox()
+            type_select.addItems(["Slider", "PushButton", "MomentaryButton"])
+            type_select.setCurrentText(ctype)
+            type_select.currentTextChanged.connect(lambda val, n=base: self.change_type(n, val))
+
+            delete_btn = QtWidgets.QPushButton("Supprimer")
+            delete_btn.setFixedWidth(100)
+            delete_btn.clicked.connect(lambda _, n=base: self.delete_control(n))
+
+            hlayout.addWidget(name_edit, stretch=2)
+            hlayout.addWidget(type_select, stretch=1)
+            hlayout.addWidget(delete_btn, stretch=0)
+            vbox.addLayout(hlayout)
+
+            # Zone du contrôle
+            control_area = QtWidgets.QWidget()
+            control_layout = QtWidgets.QVBoxLayout(control_area)
+            vbox.addWidget(control_area)
+
+            self.groups[base] = {
+                "group": group,
+                "vbox": vbox,
+                "name": name_edit,
+                "type": type_select,
+                "area": control_area,
+                "layout": control_layout,
+            }
+
+            self.build_control_ui(base, ctype)
+
+        self.scroll_layout.addStretch(1)
+
+    # --------------------------------------------------------
+    # Génération de l'interface selon le type
+    # --------------------------------------------------------
+    def build_control_ui(self, base, ctype):
+        g = self.groups[base]
+        layout = g["layout"]
+
+        # Nettoyage
+        for i in reversed(range(layout.count())):
+            item = layout.itemAt(i)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+
+        vmin = getattr(varset, f"{base}_Min")
+        vmax = getattr(varset, f"{base}_Max")
+        vcur = getattr(varset, f"{base}_Target")
+
+        # Section Min/Max
+        range_layout = QtWidgets.QHBoxLayout()
+        min_spin = QtWidgets.QDoubleSpinBox()
+        max_spin = QtWidgets.QDoubleSpinBox()
+        min_spin.setDecimals(3)
+        max_spin.setDecimals(3)
+        min_spin.setRange(-1e9, 1e9)
+        max_spin.setRange(-1e9, 1e9)
+        min_spin.setValue(vmin)
+        max_spin.setValue(vmax)
+        min_spin.valueChanged.connect(lambda val, n=base: self.update_min(n, val))
+        max_spin.valueChanged.connect(lambda val, n=base: self.update_max(n, val))
+        range_layout.addWidget(QtWidgets.QLabel("Min:"))
+        range_layout.addWidget(min_spin)
+        range_layout.addWidget(QtWidgets.QLabel("Max:"))
+        range_layout.addWidget(max_spin)
+        layout.addLayout(range_layout)
+
+        # Interface selon le type
+        if ctype == "Slider":
+            ctrl_layout = QtWidgets.QHBoxLayout()
+            slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+            slider.setMinimum(0)
+            slider.setMaximum(1000)
+            target_spin = QtWidgets.QDoubleSpinBox()
+            target_spin.setDecimals(3)
+            target_spin.setRange(-1e9, 1e9)
+            target_spin.setValue(vcur)
+            target_spin.editingFinished.connect(lambda n=base, s=target_spin: self.set_target_from_spin(n, s))
+            ctrl_layout.addWidget(slider, stretch=1)
+            ctrl_layout.addWidget(target_spin)
+            layout.addLayout(ctrl_layout)
+            slider.valueChanged.connect(lambda val, n=base: self.update_value(n, val))
+            self.sync_from_varset(base, slider, target_spin)
+
+        elif ctype == "PushButton":
+            btn = QtWidgets.QPushButton()
+            btn.clicked.connect(lambda _, n=base, b=btn: self.toggle_minmax(n, b))
+            layout.addWidget(btn)
+            self.update_button_state(base, btn)
+
+        elif ctype == "MomentaryButton":
+            btn = QtWidgets.QPushButton()
+            btn.setCheckable(True)
+            btn.pressed.connect(lambda n=base, b=btn: self.momentary_pressed(n, b))
+            btn.released.connect(lambda n=base, b=btn: self.momentary_released(n, b))
+            layout.addWidget(btn)
+            self.update_button_state(base, btn)
+
+    # --------------------------------------------------------
+    # Feedback visuel sur les boutons
+    # --------------------------------------------------------
+    def update_button_state(self, base, btn):
+        vmin = getattr(varset, f"{base}_Min")
+        vmax = getattr(varset, f"{base}_Max")
+        vcur = getattr(varset, f"{base}_Target")
+
+        ctype = getattr(varset, f"{base}_Type")
+        if ctype == "PushButton":
+            if vcur >= vmax:
+                btn.setText("Actif (Max)")
+                btn.setStyleSheet("background-color: rgba(0,180,0,80); font-weight: bold;")
+            else:
+                btn.setText("Inactif (Min)")
+                btn.setStyleSheet("background-color: rgba(180,180,180,40);")
+        elif ctype == "MomentaryButton":
+            if vcur >= vmax:
+                btn.setText("Enfoncé (Max)")
+                btn.setStyleSheet("background-color: rgba(255,160,0,100); font-weight: bold;")
+            else:
+                btn.setText("Repos (Min)")
+                btn.setStyleSheet("")
+
+    # --------------------------------------------------------
+    # Fonctions de synchronisation et mise à jour
+    # --------------------------------------------------------
+    def sync_from_varset(self, base, slider, spinbox):
+        vmin = getattr(varset, f"{base}_Min")
+        vmax = getattr(varset, f"{base}_Max")
+        vcur = getattr(varset, f"{base}_Target")
+        ratio = (vcur - vmin) / (vmax - vmin) if vmax != vmin else 0
+        slider.blockSignals(True)
+        slider.setValue(int(ratio * 1000))
+        slider.blockSignals(False)
+        spinbox.blockSignals(True)
+        spinbox.setValue(vcur)
+        spinbox.blockSignals(False)
+
+    def update_value(self, base, val):
+        vmin = getattr(varset, f"{base}_Min")
+        vmax = getattr(varset, f"{base}_Max")
+        new_val = vmin + (val / 1000.0) * (vmax - vmin)
+        setattr(varset, f"{base}_Target", new_val)
+        FreeCAD.ActiveDocument.recompute()
+
+        g = self.groups[base]
+        for i in range(g["layout"].count()):
+            item = g["layout"].itemAt(i)
+            if isinstance(item, QtWidgets.QHBoxLayout):
+                slider, spin = None, None
+                for j in range(item.count()):
+                    widget = item.itemAt(j).widget()
+                    if isinstance(widget, QtWidgets.QSlider):
+                        slider = widget
+                    elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                        spin = widget
+                if slider and spin:
+                    self.sync_from_varset(base, slider, spin)
+
+    def set_target_from_spin(self, base, spinbox):
+        setattr(varset, f"{base}_Target", spinbox.value())
+        FreeCAD.ActiveDocument.recompute()
+
+        g = self.groups[base]
+        for i in range(g["layout"].count()):
+            item = g["layout"].itemAt(i)
+            if isinstance(item, QtWidgets.QHBoxLayout):
+                slider, spin = None, None
+                for j in range(item.count()):
+                    widget = item.itemAt(j).widget()
+                    if isinstance(widget, QtWidgets.QSlider):
+                        slider = widget
+                    elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                        spin = widget
+                if slider and spin:
+                    self.sync_from_varset(base, slider, spin)
+
+    def set_target(self, base, bound):
+        val = getattr(varset, f"{base}_Max" if bound == "Max" else f"{base}_Min")
+        setattr(varset, f"{base}_Target", val)
+        FreeCAD.ActiveDocument.recompute()
+
+    def toggle_minmax(self, base, btn=None):
+        vmin = getattr(varset, f"{base}_Min")
+        vmax = getattr(varset, f"{base}_Max")
+        vcur = getattr(varset, f"{base}_Target")
+        new_val = vmax if vcur <= vmin else vmin
+        setattr(varset, f"{base}_Target", new_val)
+        FreeCAD.ActiveDocument.recompute()
+        if btn:
+            self.update_button_state(base, btn)
+
+    def momentary_pressed(self, base, btn):
+        self.set_target(base, "Max")
+        self.update_button_state(base, btn)
+
+    def momentary_released(self, base, btn):
+        self.set_target(base, "Min")
+        self.update_button_state(base, btn)
+
+    def update_min(self, base, val):
+        setattr(varset, f"{base}_Min", val)
+        FreeCAD.ActiveDocument.recompute()
+
+    def update_max(self, base, val):
+        setattr(varset, f"{base}_Max", val)
+        FreeCAD.ActiveDocument.recompute()
+
+    # --------------------------------------------------------
+    # Gestion du type, ajout et suppression
+    # --------------------------------------------------------
+    def change_type(self, base, new_type):
+        setattr(varset, f"{base}_Type", new_type)
+        FreeCAD.ActiveDocument.recompute()
+        self.build_controls()  # reconstruction propre
+
+    def rename_control(self, base, new_name):
+        setattr(varset, f"{base}_Name", new_name)
+        FreeCAD.ActiveDocument.recompute()
+
+    def add_control(self):
+        new_id = len(list_controls()) + 1
+        create_control(new_id)
+        FreeCAD.ActiveDocument.recompute()
+        self.build_controls()
+
+    def delete_control(self, base):
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Supprimer ce contrôle",
+            f"Supprimer définitivement {base} ?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
+        for suffix in ["_Name", "_Type", "_Min", "_Max", "_Target"]:
+            prop = f"{base}{suffix}"
+            if hasattr(varset, prop):
+                varset.removeProperty(prop)
+        FreeCAD.ActiveDocument.recompute()
+        self.build_controls()
+
+# ------------------------------------------------------------
+# 6. Intégration dans le Task Panel
+# ------------------------------------------------------------
+class VarSetsGuiTaskPanel:
+    def __init__(self):
+        self.form = VarSetsGuiWidget()
+    def accept(self): FreeCADGui.Control.closeDialog()
+    def reject(self): FreeCADGui.Control.closeDialog()
+
+FreeCADGui.Control.showDialog(VarSetsGuiTaskPanel())
