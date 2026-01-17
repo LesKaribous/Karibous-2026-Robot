@@ -2951,7 +2951,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "LDR07"
+		(property "Value" "LDR07 - GL5516"
 			(at 139.192 51.562 0)
 			(effects
 				(font
