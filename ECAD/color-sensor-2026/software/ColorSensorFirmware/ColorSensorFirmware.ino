@@ -1,10 +1,10 @@
-#include <Adafruit_NeoPixel.h>
+#include <tinyNeoPixel.h>
 
 #define PIXEL_PIN   PIN_PA3
 #define SENSOR_PIN  PIN_PA1
 #define TIME_GET_COLOR 30
 
-Adafruit_NeoPixel pixel(1, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+tinyNeoPixel pixel = tinyNeoPixel(1, PIXEL_PIN, NEO_GRB);
 
 static uint16_t avgRead(uint8_t n) {
   uint32_t s = 0;
@@ -60,10 +60,26 @@ void loop() {
   pixel.setPixelColor(0, 0);
   pixel.show();
 
-  // Decision (dominante)
-  if (r > g && r > b) c = 'r';
-  else if (g > r && g > b) c = 'g';
-  else if (b > r && b > g) c = 'b';
+// Decision (dominante + jaune)
+uint16_t rg_diff = (r > g) ? (r - g) : (g - r);
+
+// seuils a ajuster empiriquement
+if (r > b && g > b && rg_diff < 20) {
+  c = 'y'; // yellow
+}
+else if (r > g && r > b) {
+  c = 'r';
+}
+else if (g > r && g > b) {
+  c = 'g';
+}
+else if (b > r && b > g) {
+  c = 'b';
+}
+else {
+  c = 'u';
+}
+
 
   // Sortie ultra compacte: A R G B C
   Serial.print(ambient); Serial.print(' ');
