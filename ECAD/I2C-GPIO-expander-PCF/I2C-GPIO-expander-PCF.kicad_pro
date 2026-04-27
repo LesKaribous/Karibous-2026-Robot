@@ -549,7 +549,7 @@
       "specctra_dsn": "",
       "step": "",
       "svg": "",
-      "vrml": "PCA9685-20253.wrl"
+      "vrml": "PCF-GPIO-Expander-2026.wrl"
     },
     "page_layout_descr_file": ""
   },
